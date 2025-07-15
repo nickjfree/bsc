@@ -30,6 +30,8 @@ import (
 	"github.com/ethereum/go-ethereum/common/gopool"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/core"
+	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/internal/ethapi"
 	"github.com/ethereum/go-ethereum/rpc"
 )
@@ -40,6 +42,22 @@ var (
 	errInvalidBlockRange      = errors.New("invalid block range params")
 	errPendingLogsUnsupported = errors.New("pending logs are not supported")
 	errExceedMaxTopics        = errors.New("exceed max topics")
+
+	// Uniswap V2: Sync(uint112,uint112)
+	UniswapV2SyncTopic = crypto.Keccak256Hash([]byte("Sync(uint112,uint112)"))
+	// Uniswap V3: Swap(address,address,int256,int256,uint160,uint128,int24)
+	UniswapV3SwapTopic = crypto.Keccak256Hash([]byte("Swap(address,address,int256,int256,uint160,uint128,int24)"))
+	// PancakeSwap V3: Swap(address,address,int256,int256,uint160,uint128,int24,uint128,uint128)
+	PancakeV3SwapTopic = crypto.Keccak256Hash([]byte("Swap(address,address,int256,int256,uint160,uint128,int24,uint128,uint128)"))
+	// Uniswap V4: Swap(bytes32 indexed id, address indexed sender, int128 amount0, int128 amount1, uint160 sqrt_price_x96, uint128 liquidity, int24 tick, uint24 fee)
+	UniswapV4SwapTopic = crypto.Keccak256Hash([]byte("Swap(bytes32,address,int128,int128,uint160,uint128,int24,uint24)"))
+
+	allowedTopics = map[common.Hash]bool{
+		UniswapV2SyncTopic: true,
+		UniswapV3SwapTopic: true,
+		PancakeV3SwapTopic: true,
+		UniswapV4SwapTopic: true,
+	}
 )
 
 // The maximum number of topic criteria allowed, vm.LOG4 - vm.LOG0
@@ -194,6 +212,122 @@ func (api *FilterAPI) NewPendingTransactions(ctx context.Context, fullTx *bool) 
 	})
 
 	return rpcSub, nil
+}
+
+
+// NewPendingTransactionsWithLog creates a subscription that is triggered each time a
+// transaction enters the transaction pool. If fullTx is true the full tx is
+// sent to the client, otherwise the hash is sent.
+func (api *FilterAPI) NewPendingTransactionWithLogs(ctx context.Context, fullTx *bool) (*rpc.Subscription, error) {
+	notifier, supported := rpc.NotifierFromContext(ctx)
+	if !supported {
+		return &rpc.Subscription{}, rpc.ErrNotificationsUnsupported
+	}
+
+	rpcSub := notifier.CreateSubscription()
+
+	go func() {
+		txs := make(chan []*types.Transaction, 128)
+		pendingTxSub := api.events.SubscribePendingTxs(txs)
+		defer pendingTxSub.Unsubscribe()
+
+		chainConfig := api.sys.backend.ChainConfig()
+
+		for {
+			select {
+			case txs := <-txs:
+				// To keep the original behaviour, send a single tx hash in one notification.
+				// TODO(rjl493456442) Send a batch of tx hashes in one notification
+				latest := api.sys.backend.CurrentHeader()
+				for _, tx := range txs {
+					if fullTx != nil && *fullTx {
+						logs, err := api.simulateTxForLogs(ctx, tx)
+						if err != nil {
+							continue // Skip transactions that can't be simulated
+						}
+						// filter the logs
+						relevant := filterRelevantLogs(logs)
+						if len(relevant) == 0 {
+							continue // no matching events
+						}
+						// construct the payload
+						rpcTx := ethapi.NewRPCPendingTransaction(tx, latest, chainConfig)
+						payload := map[string]interface{}{
+							"tx":   rpcTx,
+							"logs": relevant,
+						}
+						notifier.Notify(rpcSub.ID, payload)
+					} else {
+						notifier.Notify(rpcSub.ID, tx.Hash())
+					}
+				}
+			case <-rpcSub.Err():
+				return
+			}
+		}
+	}()
+
+	return rpcSub, nil
+}
+
+// simulateTxForLogs simulates a pending transaction to extract its logs
+func (api *FilterAPI) simulateTxForLogs(ctx context.Context, tx *types.Transaction) ([]*types.Log, error) {
+	// Get current state
+	header := api.sys.backend.CurrentHeader()
+
+	// get the backend
+	backend, ok := api.sys.backend.(ethapi.Backend)
+	if !ok {
+		return nil, errors.New("api.sys.backend is not eth.EthAPIBackend")
+	}
+	statedb, header, err := backend.StateAndHeaderByNumber(ctx, rpc.BlockNumber(header.Number.Int64()))
+	if err != nil {
+		return nil, err
+	}
+
+	// Create a copy of state for simulation
+	statedb = statedb.Copy()
+
+	// get evm
+	evm := backend.GetEVM(ctx, statedb, header, nil, nil)
+
+	// Prepare the transaction
+	signer := types.MakeSigner(api.sys.backend.ChainConfig(), header.Number, header.Time)
+	msg, err := core.TransactionToMessage(tx, signer, header.BaseFee)
+	if err != nil {
+		return nil, err
+	}
+
+	// Set transaction context in state
+	statedb.SetTxContext(tx.Hash(), 0)
+
+	// Prepare state for transaction execution
+	statedb.Prepare(evm.ChainConfig().Rules(header.Number, true, header.Time), msg.From, header.Coinbase, msg.To, nil, tx.AccessList())
+
+	// Execute the transaction
+	gasPool := new(core.GasPool).AddGas(header.GasLimit)
+	var usedGas uint64
+
+	_, err = core.ApplyTransactionWithEVM(msg, gasPool, statedb, header.Number, header.Hash(), tx, &usedGas, evm)
+	if err != nil {
+		return nil, err
+	}
+
+	// Extract logs from the state
+	logs := statedb.GetLogs(tx.Hash(), header.Number.Uint64(), header.Hash())
+
+	return logs, nil
+}
+
+// filterRelevantLogs returns only logs whose first topic matches an allowed event.
+func filterRelevantLogs(logs []*types.Log) []*types.Log {
+	var result []*types.Log
+	for _, lg := range logs {
+		if len(lg.Topics) > 0 && allowedTopics[lg.Topics[0]] {
+			result = append(result, lg)
+		}
+	}
+	return result
 }
 
 // NewVotesFilter creates a filter that fetches votes that entered the vote pool.
