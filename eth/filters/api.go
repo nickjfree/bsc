@@ -29,8 +29,8 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/gopool"
 	"github.com/ethereum/go-ethereum/common/hexutil"
-	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core"
+	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/internal/ethapi"
 	"github.com/ethereum/go-ethereum/rpc"
@@ -51,12 +51,15 @@ var (
 	PancakeV3SwapTopic = crypto.Keccak256Hash([]byte("Swap(address,address,int256,int256,uint160,uint128,int24,uint128,uint128)"))
 	// Uniswap V4: Swap(bytes32 indexed id, address indexed sender, int128 amount0, int128 amount1, uint160 sqrt_price_x96, uint128 liquidity, int24 tick, uint24 fee)
 	UniswapV4SwapTopic = crypto.Keccak256Hash([]byte("Swap(bytes32,address,int128,int128,uint160,uint128,int24,uint24)"))
+	// Infinity:   Swap(index_topic_1 bytes32 id, index_topic_2 address sender, int128 amount0, int128 amount1, uint160 sqrtPriceX96, uint128 liquidity, int24 tick, uint24 fee, uint16 protocolFee)
+	InfinitySwapTopic = crypto.Keccak256Hash([]byte("Swap(bytes32,address,int128,int128,uint160,uint128,int24,uint24,uint16)"))
 
 	allowedTopics = map[common.Hash]bool{
 		UniswapV2SyncTopic: true,
 		UniswapV3SwapTopic: true,
 		PancakeV3SwapTopic: true,
 		UniswapV4SwapTopic: true,
+		InfinitySwapTopic:  true,
 	}
 )
 
@@ -214,7 +217,6 @@ func (api *FilterAPI) NewPendingTransactions(ctx context.Context, fullTx *bool) 
 	return rpcSub, nil
 }
 
-
 // NewPendingTransactionsWithLog creates a subscription that is triggered each time a
 // transaction enters the transaction pool. If fullTx is true the full tx is
 // sent to the client, otherwise the hash is sent.
@@ -241,6 +243,12 @@ func (api *FilterAPI) NewPendingTransactionWithLogs(ctx context.Context, fullTx 
 				latest := api.sys.backend.CurrentHeader()
 				for _, tx := range txs {
 					if fullTx != nil && *fullTx {
+
+						// ignore simple tx
+						if len(tx.Data()) == 0 {
+							continue
+						}
+
 						logs, err := api.simulateTxForLogs(ctx, tx)
 						if err != nil {
 							continue // Skip transactions that can't be simulated
