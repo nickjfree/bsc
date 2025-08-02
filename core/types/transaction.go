@@ -60,6 +60,7 @@ type Transaction struct {
 	hash atomic.Pointer[common.Hash]
 	size atomic.Uint64
 	from atomic.Pointer[sigCache]
+	peer string // the peer broadcasting it
 }
 
 // NewTx creates a new transaction.
@@ -196,6 +197,11 @@ func (tx *Transaction) UnmarshalBinary(b []byte) error {
 	return nil
 }
 
+// set receiving peer
+func (tx *Transaction) SetPeer(peer string) {
+	tx.peer = peer
+}
+
 // decodeTyped decodes a typed transaction from the canonical format.
 func (tx *Transaction) decodeTyped(b []byte) (TxData, error) {
 	if len(b) <= 1 {
@@ -260,6 +266,11 @@ func isProtectedV(V *big.Int) bool {
 	}
 	// anything not 27 or 28 is considered protected
 	return true
+}
+
+// Get the receiving peer
+func (tx *Transaction) Peer() string {
+	return tx.peer
 }
 
 // Protected says whether the transaction is replay-protected.
