@@ -33,6 +33,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/internal/ethapi"
+	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/rpc"
 )
 
@@ -249,6 +250,7 @@ func (api *FilterAPI) NewPendingTransactionWithLogs(ctx context.Context, fullTx 
 							continue
 						}
 
+						s := time.Now()
 						logs, err := api.simulateTxForLogs(ctx, tx)
 						if err != nil {
 							continue // Skip transactions that can't be simulated
@@ -258,12 +260,15 @@ func (api *FilterAPI) NewPendingTransactionWithLogs(ctx context.Context, fullTx 
 						if len(relevant) == 0 {
 							continue // no matching events
 						}
+						diff := time.Now().Sub(s)
 						// construct the payload
 						rpcTx := ethapi.NewRPCPendingTransaction(tx, latest, chainConfig)
 						payload := map[string]interface{}{
 							"tx":   rpcTx,
 							"logs": relevant,
 						}
+						hash := fmt.Sprintf("https://bscscan.com/tx/%s", tx.Hash())
+						log.Info("Tx with logs", "hash", hash, "state", latest.Number, "simCost", diff, "peer", tx.Peer())
 						notifier.Notify(rpcSub.ID, payload)
 					} else {
 						notifier.Notify(rpcSub.ID, tx.Hash())
@@ -292,9 +297,6 @@ func (api *FilterAPI) simulateTxForLogs(ctx context.Context, tx *types.Transacti
 	if err != nil {
 		return nil, err
 	}
-
-	// Create a copy of state for simulation
-	statedb = statedb.Copy()
 
 	// get evm
 	evm := backend.GetEVM(ctx, statedb, header, nil, nil)

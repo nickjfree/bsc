@@ -317,6 +317,11 @@ func (f *TxFetcher) Enqueue(peer string, txs []*types.Transaction, direct bool) 
 		knownMeter = txBroadcastKnownMeter
 		underpricedMeter = txBroadcastUnderpricedMeter
 		otherRejectMeter = txBroadcastOtherRejectMeter
+
+		// mark this peer
+		for _, tx := range txs {
+			tx.SetPeer(peer)
+		}
 	}
 	// Keep track of all the propagated transactions
 	inMeter.Mark(int64(len(txs)))
