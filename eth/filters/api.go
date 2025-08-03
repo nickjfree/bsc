@@ -552,6 +552,107 @@ func (api *FilterAPI) Logs(ctx context.Context, crit FilterCriteria) (*rpc.Subsc
 	return rpcSub, nil
 }
 
+// isAfter reports whether a comes after b in blockchain order
+func isAfter(a, b *types.Log) bool {
+	switch {
+	case a.BlockNumber != b.BlockNumber:
+		return a.BlockNumber > b.BlockNumber
+	case a.TxIndex != b.TxIndex:
+		return a.TxIndex > b.TxIndex
+	default:
+		return a.Index > b.Index
+	}
+}
+
+// Logs subscribe all pool related logs. it delivers all the Defi logs in one block
+func (api *FilterAPI) PoolLogs(ctx context.Context) (*rpc.Subscription, error) {
+	notifier, supported := rpc.NotifierFromContext(ctx)
+	if !supported {
+		return &rpc.Subscription{}, rpc.ErrNotificationsUnsupported
+	}
+
+	rpcSub := notifier.CreateSubscription()
+	matchedLogs := make(chan []*types.Log)
+
+	// Build the topic filter
+	topics := make([]common.Hash, 0, len(allowedTopics))
+	for topic := range allowedTopics {
+		topics = append(topics, topic)
+	}
+	crit := ethereum.FilterQuery{
+		Topics: [][]common.Hash{topics},
+	}
+
+	logsSub, err := api.events.SubscribeLogs(crit, matchedLogs)
+	if err != nil {
+		return nil, err
+	}
+
+	gopool.Submit(func() {
+		defer logsSub.Unsubscribe()
+		for {
+			select {
+			case logs := <-matchedLogs:
+				// Grouping by (address, topic0, optional topic1)
+				type logKey struct {
+					Address    common.Address
+					Topic0     common.Hash
+					Topic1     common.Hash
+					TopicCount int
+				}
+				latest := make(map[logKey]*types.Log, len(logs))
+
+				for _, lg := range logs {
+					if len(lg.Topics) == 0 {
+						continue
+					}
+					sig := lg.Topics[0]
+					var key logKey
+
+					switch sig {
+					case UniswapV2SyncTopic:
+						// group by address only
+						key = logKey{Address: lg.Address, TopicCount: 0}
+
+					case UniswapV3SwapTopic, PancakeV3SwapTopic:
+						// group by address + signature
+						key = logKey{Address: lg.Address, Topic0: sig, TopicCount: 1}
+
+					case UniswapV4SwapTopic, InfinitySwapTopic:
+						// group by address + signature + first indexed topic (if any)
+						key = logKey{Address: lg.Address, Topic0: sig, TopicCount: 1}
+						if len(lg.Topics) > 1 {
+							key.Topic1 = lg.Topics[1]
+							key.TopicCount = 2
+						}
+
+					default:
+						// not an allowed topic
+						continue
+					}
+
+					// keep only the most recent per key
+					if prev, ok := latest[key]; !ok || isAfter(lg, prev) {
+						latest[key] = lg
+					}
+				}
+
+				// collect into slice and notify
+				out := make([]*types.Log, 0, len(latest))
+				for _, lg := range latest {
+					out = append(out, lg)
+				}
+				notifier.Notify(rpcSub.ID, out)
+
+			case <-rpcSub.Err():
+				return
+			}
+		}
+	})
+
+	return rpcSub, nil
+}
+
 // FilterCriteria represents a request to create a new filter.
 // Same as ethereum.FilterQuery but with UnmarshalJSON() method.
 type FilterCriteria ethereum.FilterQuery
