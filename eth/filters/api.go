@@ -30,7 +30,6 @@ import (
 	"github.com/ethereum/go-ethereum/common/gopool"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core/history"
-	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
@@ -326,13 +325,13 @@ func (api *FilterAPI) simulateTxForLogs(ctx context.Context, tx *types.Transacti
 	gasPool := new(core.GasPool).AddGas(header.GasLimit)
 	var usedGas uint64
 
-	_, err = core.ApplyTransactionWithEVM(msg, gasPool, statedb, header.Number, header.Hash(), tx, &usedGas, evm)
+	_, err = core.ApplyTransactionWithEVM(msg, gasPool, statedb, header.Number, header.Hash(), header.Time, tx, &usedGas, evm)
 	if err != nil {
 		return nil, err
 	}
 
 	// Extract logs from the state
-	logs := statedb.GetLogs(tx.Hash(), header.Number.Uint64(), header.Hash())
+	logs := statedb.GetLogs(tx.Hash(), header.Number.Uint64(), header.Hash(), header.Time)
 
 	return logs, nil
 }
