@@ -50,14 +50,19 @@ var (
 	errExceedMaxTxHashes      = errors.New("exceed max number of transaction hashes allowed per transactionReceipts subscription")
 
 	// Uniswap V2: Sync(uint112,uint112)
+	// 0x1c411e9a96e071241c2f21f7726b17ae89e3cab4c78be50e062b03a9fffbbad1
 	UniswapV2SyncTopic = crypto.Keccak256Hash([]byte("Sync(uint112,uint112)"))
-	// Uniswap V3: Swap(address,address,int256,int256,uint160,uint128,int24)
+	// Uniswap V3: Swap(address,address,int256,int256,uint160,uint128,int24) 
+	// 0xc42079f94a6350d7e6235f29174924f928cc2ac818eb64fed8004e115fbcca67
 	UniswapV3SwapTopic = crypto.Keccak256Hash([]byte("Swap(address,address,int256,int256,uint160,uint128,int24)"))
 	// PancakeSwap V3: Swap(address,address,int256,int256,uint160,uint128,int24,uint128,uint128)
+	// 0x19b47279256b2a23a1665c810c8d55a1758940ee09377d4f8d26497a3577dc83
 	PancakeV3SwapTopic = crypto.Keccak256Hash([]byte("Swap(address,address,int256,int256,uint160,uint128,int24,uint128,uint128)"))
 	// Uniswap V4: Swap(bytes32 indexed id, address indexed sender, int128 amount0, int128 amount1, uint160 sqrt_price_x96, uint128 liquidity, int24 tick, uint24 fee)
+	// 0x40e9cecb9f5f1f1c5b9c97dec2917b7ee92e57ba5563708daca94dd84ad7112f
 	UniswapV4SwapTopic = crypto.Keccak256Hash([]byte("Swap(bytes32,address,int128,int128,uint160,uint128,int24,uint24)"))
 	// Infinity:   Swap(index_topic_1 bytes32 id, index_topic_2 address sender, int128 amount0, int128 amount1, uint160 sqrtPriceX96, uint128 liquidity, int24 tick, uint24 fee, uint16 protocolFee)
+	// 0x04206ad2b7c0f463bff3dd4f33c5735b0f2957a351e4f79763a4fa9e775dd237
 	InfinitySwapTopic = crypto.Keccak256Hash([]byte("Swap(bytes32,address,int128,int128,uint160,uint128,int24,uint24,uint16)"))
 
 	allowedTopics = map[common.Hash]bool{
