@@ -29,9 +29,12 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/gopool"
 	"github.com/ethereum/go-ethereum/common/hexutil"
+	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/history"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/internal/ethapi"
+	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/rpc"
 )
 
@@ -45,6 +48,25 @@ var (
 	errExceedMaxTopics        = errors.New("exceed max topics")
 	errExceedLogQueryLimit    = errors.New("exceed max addresses or topics per search position")
 	errExceedMaxTxHashes      = errors.New("exceed max number of transaction hashes allowed per transactionReceipts subscription")
+
+	// Uniswap V2: Sync(uint112,uint112)
+	UniswapV2SyncTopic = crypto.Keccak256Hash([]byte("Sync(uint112,uint112)"))
+	// Uniswap V3: Swap(address,address,int256,int256,uint160,uint128,int24)
+	UniswapV3SwapTopic = crypto.Keccak256Hash([]byte("Swap(address,address,int256,int256,uint160,uint128,int24)"))
+	// PancakeSwap V3: Swap(address,address,int256,int256,uint160,uint128,int24,uint128,uint128)
+	PancakeV3SwapTopic = crypto.Keccak256Hash([]byte("Swap(address,address,int256,int256,uint160,uint128,int24,uint128,uint128)"))
+	// Uniswap V4: Swap(bytes32 indexed id, address indexed sender, int128 amount0, int128 amount1, uint160 sqrt_price_x96, uint128 liquidity, int24 tick, uint24 fee)
+	UniswapV4SwapTopic = crypto.Keccak256Hash([]byte("Swap(bytes32,address,int128,int128,uint160,uint128,int24,uint24)"))
+	// Infinity:   Swap(index_topic_1 bytes32 id, index_topic_2 address sender, int128 amount0, int128 amount1, uint160 sqrtPriceX96, uint128 liquidity, int24 tick, uint24 fee, uint16 protocolFee)
+	InfinitySwapTopic = crypto.Keccak256Hash([]byte("Swap(bytes32,address,int128,int128,uint160,uint128,int24,uint24,uint16)"))
+
+	allowedTopics = map[common.Hash]bool{
+		UniswapV2SyncTopic: true,
+		UniswapV3SwapTopic: true,
+		PancakeV3SwapTopic: true,
+		UniswapV4SwapTopic: true,
+		InfinitySwapTopic:  true,
+	}
 )
 
 const (
@@ -205,6 +227,128 @@ func (api *FilterAPI) NewPendingTransactions(ctx context.Context, fullTx *bool) 
 	})
 
 	return rpcSub, nil
+}
+
+// NewPendingTransactionsWithLog creates a subscription that is triggered each time a
+// transaction enters the transaction pool. If fullTx is true the full tx is
+// sent to the client, otherwise the hash is sent.
+func (api *FilterAPI) NewPendingTransactionWithLogs(ctx context.Context, fullTx *bool) (*rpc.Subscription, error) {
+	notifier, supported := rpc.NotifierFromContext(ctx)
+	if !supported {
+		return &rpc.Subscription{}, rpc.ErrNotificationsUnsupported
+	}
+
+	rpcSub := notifier.CreateSubscription()
+
+	go func() {
+		txs := make(chan []*types.Transaction, 128)
+		pendingTxSub := api.events.SubscribePendingTxs(txs)
+		defer pendingTxSub.Unsubscribe()
+
+		chainConfig := api.sys.backend.ChainConfig()
+
+		for {
+			select {
+			case txs := <-txs:
+				// To keep the original behaviour, send a single tx hash in one notification.
+				// TODO(rjl493456442) Send a batch of tx hashes in one notification
+				latest := api.sys.backend.CurrentHeader()
+				for _, tx := range txs {
+					if fullTx != nil && *fullTx {
+
+						// ignore simple tx
+						if len(tx.Data()) == 0 {
+							continue
+						}
+
+						s := time.Now()
+						logs, err := api.simulateTxForLogs(ctx, tx)
+						if err != nil {
+							continue // Skip transactions that can't be simulated
+						}
+						// filter the logs
+						relevant := filterRelevantLogs(logs)
+						if len(relevant) == 0 {
+							continue // no matching events
+						}
+						diff := time.Now().Sub(s)
+						// construct the payload
+						rpcTx := ethapi.NewRPCPendingTransaction(tx, latest, chainConfig)
+						payload := map[string]interface{}{
+							"tx":   rpcTx,
+							"logs": relevant,
+						}
+						hash := fmt.Sprintf("https://bscscan.com/tx/%s", tx.Hash())
+						log.Info("Tx with logs", "hash", hash, "state", latest.Number, "simCost", diff, "peer", tx.Peer())
+						notifier.Notify(rpcSub.ID, payload)
+					} else {
+						notifier.Notify(rpcSub.ID, tx.Hash())
+					}
+				}
+			case <-rpcSub.Err():
+				return
+			}
+		}
+	}()
+
+	return rpcSub, nil
+}
+
+// simulateTxForLogs simulates a pending transaction to extract its logs
+func (api *FilterAPI) simulateTxForLogs(ctx context.Context, tx *types.Transaction) ([]*types.Log, error) {
+	// Get current state
+	header := api.sys.backend.CurrentHeader()
+
+	// get the backend
+	backend, ok := api.sys.backend.(ethapi.Backend)
+	if !ok {
+		return nil, errors.New("api.sys.backend is not eth.EthAPIBackend")
+	}
+	statedb, header, err := backend.StateAndHeaderByNumber(ctx, rpc.BlockNumber(header.Number.Int64()))
+	if err != nil {
+		return nil, err
+	}
+
+	// get evm
+	evm := backend.GetEVM(ctx, statedb, header, nil, nil)
+
+	// Prepare the transaction
+	signer := types.MakeSigner(api.sys.backend.ChainConfig(), header.Number, header.Time)
+	msg, err := core.TransactionToMessage(tx, signer, header.BaseFee)
+	if err != nil {
+		return nil, err
+	}
+
+	// Set transaction context in state
+	statedb.SetTxContext(tx.Hash(), 0)
+
+	// Prepare state for transaction execution
+	statedb.Prepare(evm.ChainConfig().Rules(header.Number, true, header.Time), msg.From, header.Coinbase, msg.To, nil, tx.AccessList())
+
+	// Execute the transaction
+	gasPool := new(core.GasPool).AddGas(header.GasLimit)
+	var usedGas uint64
+
+	_, err = core.ApplyTransactionWithEVM(msg, gasPool, statedb, header.Number, header.Hash(), header.Time, tx, &usedGas, evm)
+	if err != nil {
+		return nil, err
+	}
+
+	// Extract logs from the state
+	logs := statedb.GetLogs(tx.Hash(), header.Number.Uint64(), header.Hash(), header.Time)
+
+	return logs, nil
+}
+
+// filterRelevantLogs returns only logs whose first topic matches an allowed event.
+func filterRelevantLogs(logs []*types.Log) []*types.Log {
+	var result []*types.Log
+	for _, lg := range logs {
+		if len(lg.Topics) > 0 && allowedTopics[lg.Topics[0]] {
+			result = append(result, lg)
+		}
+	}
+	return result
 }
 
 // NewVotesFilter creates a filter that fetches votes that entered the vote pool.
@@ -528,6 +672,107 @@ func (args *TransactionReceiptsQuery) UnmarshalJSON(data []byte) error {
 
 	args.TransactionHashes = raw.TransactionHashes
 	return nil
+}
+
+// isAfter reports whether a comes after b in blockchain order
+func isAfter(a, b *types.Log) bool {
+	switch {
+	case a.BlockNumber != b.BlockNumber:
+		return a.BlockNumber > b.BlockNumber
+	case a.TxIndex != b.TxIndex:
+		return a.TxIndex > b.TxIndex
+	default:
+		return a.Index > b.Index
+	}
+}
+
+// Logs subscribe all pool related logs. it delivers all the Defi logs in one block
+func (api *FilterAPI) PoolLogs(ctx context.Context) (*rpc.Subscription, error) {
+	notifier, supported := rpc.NotifierFromContext(ctx)
+	if !supported {
+		return &rpc.Subscription{}, rpc.ErrNotificationsUnsupported
+	}
+
+	rpcSub := notifier.CreateSubscription()
+	matchedLogs := make(chan []*types.Log)
+
+	// Build the topic filter
+	topics := make([]common.Hash, 0, len(allowedTopics))
+	for topic := range allowedTopics {
+		topics = append(topics, topic)
+	}
+	crit := ethereum.FilterQuery{
+		Topics: [][]common.Hash{topics},
+	}
+
+	logsSub, err := api.events.SubscribeLogs(crit, matchedLogs)
+	if err != nil {
+		return nil, err
+	}
+
+	gopool.Submit(func() {
+		defer logsSub.Unsubscribe()
+		for {
+			select {
+			case logs := <-matchedLogs:
+				// Grouping by (address, topic0, optional topic1)
+				type logKey struct {
+					Address    common.Address
+					Topic0     common.Hash
+					Topic1     common.Hash
+					TopicCount int
+				}
+				latest := make(map[logKey]*types.Log, len(logs))
+
+				for _, lg := range logs {
+					if len(lg.Topics) == 0 {
+						continue
+					}
+					sig := lg.Topics[0]
+					var key logKey
+
+					switch sig {
+					case UniswapV2SyncTopic:
+						// group by address only
+						key = logKey{Address: lg.Address, TopicCount: 0}
+
+					case UniswapV3SwapTopic, PancakeV3SwapTopic:
+						// group by address + signature
+						key = logKey{Address: lg.Address, Topic0: sig, TopicCount: 1}
+
+					case UniswapV4SwapTopic, InfinitySwapTopic:
+						// group by address + signature + first indexed topic (if any)
+						key = logKey{Address: lg.Address, Topic0: sig, TopicCount: 1}
+						if len(lg.Topics) > 1 {
+							key.Topic1 = lg.Topics[1]
+							key.TopicCount = 2
+						}
+
+					default:
+						// not an allowed topic
+						continue
+					}
+
+					// keep only the most recent per key
+					if prev, ok := latest[key]; !ok || isAfter(lg, prev) {
+						latest[key] = lg
+					}
+				}
+
+				// collect into slice and notify
+				out := make([]*types.Log, 0, len(latest))
+				for _, lg := range latest {
+					out = append(out, lg)
+				}
+				notifier.Notify(rpcSub.ID, out)
+
+			case <-rpcSub.Err():
+				return
+			}
+		}
+	})
+
+	return rpcSub, nil
 }
 
 // FilterCriteria represents a request to create a new filter.
