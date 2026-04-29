@@ -99,7 +99,6 @@ type EVMInterpreter struct {
 	hasher    crypto.KeccakState // Keccak256 hasher instance shared across opcodes
 	hasherBuf common.Hash        // Keccak256 hasher result array shared across opcodes
 
-	readOnly   bool   // Whether to throw on stateful modifications
 	returnData []byte // Last CALL's return data for subsequent reuse
 }
 
@@ -176,9 +175,9 @@ func (in *EVMInterpreter) Run(contract *Contract, input []byte, readOnly bool) (
 
 	// Make sure the readOnly is only set if we aren't in readOnly yet.
 	// This also makes sure that the readOnly flag isn't removed for child calls.
-	if readOnly && !in.readOnly {
-		in.readOnly = true
-		defer func() { in.readOnly = false }()
+	if readOnly && !in.evm.readOnly {
+		in.evm.readOnly = true
+		defer func() { in.evm.readOnly = false }()
 	}
 
 	// Reset the previous call's return data. It's unimportant to preserve the old buffer
@@ -212,6 +211,7 @@ func (in *EVMInterpreter) Run(contract *Contract, input []byte, readOnly bool) (
 		res       []byte // result of the opcode execution function
 		debug     = in.evm.Config.Tracer != nil
 		isEIP4762 = in.evm.chainRules.IsEIP4762
+		fallback  []OpCode
 	)
 	// Don't move this deferred function, it's placed before the OnOpcode-deferred method,
 	// so that it gets executed _after_: the OnOpcode needs the stacks before
@@ -259,7 +259,11 @@ func (in *EVMInterpreter) Run(contract *Contract, input []byte, readOnly bool) (
 
 		// Get the operation from the jump table and validate the stack to ensure there are
 		// enough stack items available to perform the operation.
-		op = contract.GetOp(pc)
+		if len(fallback) > 0 {
+			op = fallback[0]
+		} else {
+			op = contract.GetOp(pc)
+		}
 		operation := jumpTable[op]
 		cost = operation.constantGas // For tracing
 		// Validate stack
@@ -270,9 +274,11 @@ func (in *EVMInterpreter) Run(contract *Contract, input []byte, readOnly bool) (
 		}
 		// for tracing: this gas consumption event is emitted below in the debug section.
 		if contract.Gas < cost {
-			if seq, isSuper := DecomposeSuperInstruction(op); isSuper {
-				err = in.tryFallbackForSuperInstruction(&pc, seq, contract, stack, mem, callContext)
-				return nil, err
+			if len(fallback) == 0 {
+				if seq, isSuper := DecomposeSuperInstruction(op); isSuper {
+					fallback = seq
+					continue
+				}
 			}
 			return nil, ErrOutOfGas
 		} else {
@@ -311,9 +317,11 @@ func (in *EVMInterpreter) Run(contract *Contract, input []byte, readOnly bool) (
 			if contract.Gas < dynamicCost {
 				contract.Gas += operation.constantGas // restore deducted constant gas first
 				mem.lastGasCost = memLastGasCost
-				if seq, isSuper := DecomposeSuperInstruction(op); isSuper {
-					err = in.tryFallbackForSuperInstruction(&pc, seq, contract, stack, mem, callContext)
-					return nil, err
+				if len(fallback) == 0 {
+					if seq, isSuper := DecomposeSuperInstruction(op); isSuper {
+						fallback = seq
+						continue
+					}
 				}
 				return nil, ErrOutOfGas
 			} else {
@@ -341,6 +349,9 @@ func (in *EVMInterpreter) Run(contract *Contract, input []byte, readOnly bool) (
 			break
 		}
 		pc++
+		if len(fallback) > 0 {
+			fallback = fallback[1:]
+		}
 	}
 
 	if err == errStopToken {
