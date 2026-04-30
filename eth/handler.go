@@ -492,22 +492,6 @@ func (h *handler) runEthPeer(peer *eth.Peer, handler eth.Handler) error {
 	}
 	defer h.decHandlers()
 
-	var eth68Enabled bool
-	for _, cap_ := range peer.Caps() {
-		switch cap_.Name {
-		case "eth":
-			switch cap_.Version {
-			case 68:
-				eth68Enabled = true
-			default:
-			}
-		}
-	}
-	if !eth68Enabled {
-		log.Warn("Useless peer:", peer.Node().URLv4(), peer.Caps())
-		return p2p.DiscUselessPeer
-	}
-
 	// If the peer has a `snap` extension, wait for it to connect so we can have
 	// a uniform initialization/teardown mechanism
 	snap, err := h.peers.waitSnapExtension(peer)
