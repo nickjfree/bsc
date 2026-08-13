@@ -23,6 +23,13 @@
 /build/bin/
 /geth*.zip
 
+# locally-built helper binaries (source lives under cmd/)
+/contractscan
+/createscan
+/mevscan
+/mevtips
+/mevverify
+
 # used by the build/ci.go archive + upload tool
 /geth*.tar.gz
 /geth*.tar.gz.sig
