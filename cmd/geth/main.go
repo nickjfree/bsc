@@ -87,6 +87,10 @@ var (
 		utils.OverrideBreatheBlockInterval,
 		utils.OverrideFixedTurnLength,
 		utils.EnablePersonal, // deprecated
+		utils.BloXrouteEnabledFlag,
+		utils.BloXrouteEndpointFlag,
+		utils.BloXrouteAuthFlag,
+		utils.BloXrouteNetworkFlag,
 		utils.TxPoolLocalsFlag,
 		utils.TxPoolNoLocalsFlag,
 		utils.TxPoolJournalFlag,

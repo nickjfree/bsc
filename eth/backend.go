@@ -49,6 +49,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/core/vote"
+	"github.com/ethereum/go-ethereum/eth/bloxroute"
 	"github.com/ethereum/go-ethereum/eth/downloader"
 	"github.com/ethereum/go-ethereum/eth/ethconfig"
 	"github.com/ethereum/go-ethereum/eth/filters"
@@ -448,6 +449,16 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 		}
 		eth.localTxTracker = locals.New(config.TxPool.Journal, rejournal, eth.blockchain.Config(), eth.txPool)
 		stack.RegisterLifecycle(eth.localTxTracker)
+	}
+
+	// Optionally ingest bloXroute's newTx stream directly into the txpool, so
+	// transactions bloXroute sees before our p2p layer surface early in the
+	// pending-tx / newPendingTransactionWithLogs feeds.
+	if config.BloXroute.Enabled {
+		bx := bloxroute.New(config.BloXroute, func(txs []*types.Transaction) {
+			eth.txPool.Add(txs, false)
+		})
+		stack.RegisterLifecycle(bx)
 	}
 
 	// Permit the downloader to use the trie cache allowance during fast sync

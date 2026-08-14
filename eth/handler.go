@@ -200,6 +200,8 @@ type handler struct {
 
 	handlerStartCh chan struct{}
 	handlerDoneCh  chan struct{}
+
+	lastBlockReceiveTime time.Time
 }
 
 // newHandler returns a handler for all Ethereum chain management protocol.
@@ -386,8 +388,18 @@ func newHandler(config *handlerConfig) (*handler, error) {
 		}
 		return p.RequestTxs(hashes)
 	}
+
 	addTxs := func(peer string, txs []*types.Transaction) []error {
 		errors := h.txpool.Add(txs, false)
+		noneceTooLowNumber := 0
+		// current block
+		var blockSeenTime int64
+		if head := h.chain.CurrentBlock(); head != nil {
+			stats := h.chain.GetBlockStats(head.Hash())
+			if stats != nil {
+				blockSeenTime = stats.RecvNewBlockTime.Load()
+			}
+		}
 		for _, err := range errors {
 			if err == txpool.ErrInBlackList {
 				accountBlacklistPeerCounter.Inc(1)
@@ -398,6 +410,17 @@ func newHandler(config *handlerConfig) (*handler, error) {
 						log.Warn("blacklist account detected from other peer", "remoteAddr", remoteAddr, "ID", p.ID())
 					}
 				}
+			}
+			if err != nil && strings.Contains(err.Error(), "nonce too low") {
+				noneceTooLowNumber += 1
+			}
+		}
+		if noneceTooLowNumber > 0 {
+			delay := time.Now().UnixMilli() - blockSeenTime
+			// remove the peer if even slow
+			if blockSeenTime > 0 && delay > 350 {
+				// h.removePeer(peer)
+				log.Warn("slow peer", "peer", peer, "delay", delay, "txs", noneceTooLowNumber)
 			}
 		}
 		return errors

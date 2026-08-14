@@ -49,6 +49,7 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/crypto/kzg4844"
 	"github.com/ethereum/go-ethereum/eth"
+	"github.com/ethereum/go-ethereum/eth/bloxroute"
 	"github.com/ethereum/go-ethereum/eth/ethconfig"
 	"github.com/ethereum/go-ethereum/eth/filters"
 	"github.com/ethereum/go-ethereum/eth/gasprice"
@@ -2031,6 +2032,48 @@ func setRequiredBlocks(ctx *cli.Context, cfg *ethconfig.Config) {
 	}
 }
 
+// bloXroute newTx ingestion flags.
+var (
+	BloXrouteEnabledFlag = &cli.BoolFlag{
+		Name:     "bloxroute.enabled",
+		Usage:    "Ingest the bloXroute newTx stream into the txpool (requires --bloxroute.auth)",
+		Category: flags.EthCategory,
+	}
+	BloXrouteEndpointFlag = &cli.StringFlag{
+		Name:     "bloxroute.endpoint",
+		Usage:    "bloXroute Cloud-API websocket endpoint",
+		Value:    bloxroute.DefaultConfig.Endpoint,
+		Category: flags.EthCategory,
+	}
+	BloXrouteAuthFlag = &cli.StringFlag{
+		Name:     "bloxroute.auth",
+		Usage:    "bloXroute Authorization header value (account secret)",
+		Category: flags.EthCategory,
+	}
+	BloXrouteNetworkFlag = &cli.StringFlag{
+		Name:     "bloxroute.network",
+		Usage:    "bloXroute blockchain_network (e.g. BSC-Mainnet)",
+		Value:    bloxroute.DefaultConfig.Network,
+		Category: flags.EthCategory,
+	}
+)
+
+// setBloXroute applies the --bloxroute.* flags onto the config.
+func setBloXroute(ctx *cli.Context, cfg *bloxroute.Config) {
+	if ctx.Bool(BloXrouteEnabledFlag.Name) {
+		cfg.Enabled = true
+	}
+	if ctx.IsSet(BloXrouteEndpointFlag.Name) {
+		cfg.Endpoint = ctx.String(BloXrouteEndpointFlag.Name)
+	}
+	if ctx.IsSet(BloXrouteAuthFlag.Name) {
+		cfg.Auth = ctx.String(BloXrouteAuthFlag.Name)
+	}
+	if ctx.IsSet(BloXrouteNetworkFlag.Name) {
+		cfg.Network = ctx.String(BloXrouteNetworkFlag.Name)
+	}
+}
+
 // SetEthConfig applies eth-related command line flags to the config.
 func SetEthConfig(ctx *cli.Context, stack *node.Node, cfg *ethconfig.Config) {
 	// Avoid conflicting network flags, don't allow network id override on preset networks
@@ -2044,6 +2087,7 @@ func SetEthConfig(ctx *cli.Context, stack *node.Node, cfg *ethconfig.Config) {
 	setEtherbase(ctx, cfg)
 	setGPO(ctx, &cfg.GPO)
 	setTxPool(ctx, &cfg.TxPool)
+	setBloXroute(ctx, &cfg.BloXroute)
 	setBlobPool(ctx, &cfg.BlobPool)
 	setMiner(ctx, &cfg.Miner)
 	setRequiredBlocks(ctx, cfg)

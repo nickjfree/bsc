@@ -31,6 +31,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/history"
 	"github.com/ethereum/go-ethereum/core/txpool/blobpool"
 	"github.com/ethereum/go-ethereum/core/txpool/legacypool"
+	"github.com/ethereum/go-ethereum/eth/bloxroute"
 	"github.com/ethereum/go-ethereum/eth/gasprice"
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/internal/ethapi"
@@ -72,6 +73,7 @@ var Defaults = Config{
 	Miner:                  minerconfig.DefaultConfig,
 	TxPool:                 legacypool.DefaultConfig,
 	BlobPool:               blobpool.DefaultConfig,
+	BloXroute:              bloxroute.DefaultConfig,
 	RPCGasCap:              50000000,
 	RPCEVMTimeout:          5 * time.Second,
 	GPO:                    FullNodeGPO,
@@ -182,6 +184,12 @@ type Config struct {
 	// Transaction pool options
 	TxPool   legacypool.Config
 	BlobPool blobpool.Config
+
+	// bloXroute newTx ingestion: stream txs from bloXroute straight into the
+	// txpool so they surface early in the pending-tx / WithLogs feeds. Set via
+	// the --bloxroute.* flags. (Not in gen_config.go, so config.toml support
+	// needs `go generate`; the CLI flags work as-is.)
+	BloXroute bloxroute.Config `toml:",omitempty"`
 
 	// Gas Price Oracle options
 	GPO gasprice.Config
