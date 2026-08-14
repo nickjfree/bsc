@@ -46,11 +46,23 @@ var DefaultConfig = Config{
 type TxInjector func([]*types.Transaction)
 
 const (
-	txChanSize   = 8192                   // decoded-tx buffer before injection
-	maxBatch     = 128                    // txpool.Add batch size
-	batchTimeout = 20 * time.Millisecond  // flush cadence
-	reportEvery  = 30 * time.Second       // throughput log cadence
-	maxBackoff   = 30 * time.Second       // reconnect backoff ceiling
+	txChanSize   = 8192                  // decoded-tx buffer before injection
+	maxBatch     = 128                   // txpool.Add batch size
+	batchTimeout = 20 * time.Millisecond // flush cadence
+	reportEvery  = 30 * time.Second      // throughput log cadence
+	maxBackoff   = 30 * time.Second      // reconnect backoff ceiling
+
+	// defaultReadTimeout bounds how long we wait for the next message before
+	// treating the socket as dead. bloXroute's newTxs feed is continuous
+	// (hundreds/sec on BSC mainnet), so a multi-second silence means a
+	// half-open / stalled connection: the read deadline then trips ReadMessage
+	// and forces a reconnect instead of blocking forever.
+	defaultReadTimeout = 45 * time.Second
+
+	// healthyReset: a session that stayed connected at least this long is
+	// considered healthy, so the reconnect backoff resets to its base (instead
+	// of staying stuck at the 30s ceiling after some earlier flapping).
+	healthyReset = 60 * time.Second
 )
 
 // Client streams newTx notifications from bloXroute and injects them locally.
@@ -58,6 +70,8 @@ const (
 type Client struct {
 	cfg    Config
 	inject TxInjector
+
+	readTimeout time.Duration // per-message read deadline; 0 disables (set in New)
 
 	txCh chan *types.Transaction
 	quit chan struct{}
@@ -78,10 +92,11 @@ func New(cfg Config, inject TxInjector) *Client {
 		cfg.Network = DefaultConfig.Network
 	}
 	return &Client{
-		cfg:    cfg,
-		inject: inject,
-		txCh:   make(chan *types.Transaction, txChanSize),
-		quit:   make(chan struct{}),
+		cfg:         cfg,
+		inject:      inject,
+		readTimeout: defaultReadTimeout,
+		txCh:        make(chan *types.Transaction, txChanSize),
+		quit:        make(chan struct{}),
 	}
 }
 
@@ -120,18 +135,22 @@ func (c *Client) streamLoop() {
 			return
 		default:
 		}
+		started := time.Now()
 		if err := c.run(); err != nil {
 			c.errs.Add(1)
 			log.Warn("bloXroute stream error, reconnecting", "err", err, "in", backoff)
+		}
+		// A session that stayed up a while was healthy: reset the backoff so
+		// the next reconnect is prompt instead of stuck at the 30s ceiling.
+		if time.Since(started) >= healthyReset {
+			backoff = time.Second
 		}
 		select {
 		case <-c.quit:
 			return
 		case <-time.After(backoff):
 		}
-		if backoff < maxBackoff {
-			backoff *= 2
-		}
+		backoff = growBackoff(backoff)
 	}
 }
 
@@ -197,12 +216,32 @@ func (c *Client) run() error {
 	log.Info("bloXroute subscribed to newTxs", "network", c.cfg.Network)
 
 	for {
+		// Bound each read: if the feed goes silent (half-open/stalled socket),
+		// the deadline trips ReadMessage so streamLoop can reconnect instead of
+		// blocking forever. Reset on every message, so a live feed never trips it.
+		if c.readTimeout > 0 {
+			if err := conn.SetReadDeadline(time.Now().Add(c.readTimeout)); err != nil {
+				return err
+			}
+		}
 		_, data, err := conn.ReadMessage()
 		if err != nil {
 			return err
 		}
 		c.handle(data)
 	}
+}
+
+// growBackoff doubles the reconnect backoff, capped at maxBackoff.
+func growBackoff(cur time.Duration) time.Duration {
+	if cur >= maxBackoff {
+		return maxBackoff
+	}
+	next := cur * 2
+	if next > maxBackoff {
+		return maxBackoff
+	}
+	return next
 }
 
 // notif is the Cloud-API newTx notification envelope.

@@ -1,0 +1,53 @@
+To: support@bloxroute.com
+Subject: Paid BSC mempool stream ($300) but newTxs returns "not allowed" - please activate on account 1470ab8f
+
+Hello bloXroute Support,
+
+I have already purchased the $300 BSC mempool stream service, but I cannot use
+the newTxs stream: every subscription is rejected with the error
+"newTxs is not allowed". It looks like the entitlement I paid for is not
+active on my account.
+
+Account ID: 1470ab8f-8df3-4373-8413-6bcdfb371298
+Plan purchased: BSC mempool stream ($300)
+Payment date / reference: <fill in - date and any invoice/transaction ID>
+
+What I've verified so far:
+- Authentication and the WebSocket handshake succeed. I connect with the
+  Authorization header (base64 of accountID:secret) and the connection opens
+  normally - only the subscribe request is rejected.
+- The rejection happens for every stream I try - newTxs, pendingTxs, and
+  newBlocks - each returns "... is not allowed".
+- I tried both endpoints and get the same result on both:
+    wss://virginia.bsc.blxrbdn.com/ws
+    wss://api.blxrbdn.com/ws
+- It is NOT a max-connections / concurrency issue. I made sure only a single
+  client was connected (I stopped every other consumer of this account), and
+  the subscription is still rejected.
+
+The exact subscribe message I send:
+  {"jsonrpc":"2.0","id":1,"method":"subscribe",
+   "params":["newTxs",{"include":["raw_tx"],"blockchain_network":"BSC-Mainnet"}]}
+
+Since the payment for the BSC mempool stream is already complete, could you
+please:
+  1. Confirm the $300 BSC mempool stream plan is active on account
+     1470ab8f-8df3-4373-8413-6bcdfb371298, and
+  2. Activate the newTxs (and pendingTxs) streaming entitlement so the
+     subscriptions above stop returning "not allowed".
+
+If anything else is needed from my side to provision it, please let me know.
+
+Thank you,
+<your name>
+<the email on the bloXroute account>
+
+
+-----------------------------------------------------------------------------
+NOTES (do not send - internal reminders):
+- Fill in the payment date / invoice or transaction reference, plus your name
+  and the account email. This proves the purchase and speeds provisioning.
+- NEVER paste the full Authorization header or the secret half of the key. The
+  account ID above is all support needs to locate the account.
+- Optional: capture the full raw JSON error bloXroute returns on the failed
+  subscribe and paste it under "What I've verified" - it speeds up their triage.
