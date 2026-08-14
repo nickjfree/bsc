@@ -966,6 +966,15 @@ func (h *handler) queryValidatorNodeIDsMap() map[common.Address][]enode.ID {
 	return nodeIDsMap
 }
 
+// isLocalOnly reports whether a transaction must never be gossiped to peers.
+// Currently this is bloXroute-ingested txs (tagged via SetPeer): re-broadcasting
+// them would leak the commercial feed's early sight to our peers and redistribute
+// a paid stream. They still live in the pool (so they surface in the local
+// pending / WithLogs feeds), they are just not propagated.
+func isLocalOnly(tx *types.Transaction) bool {
+	return tx.Peer() == types.PeerBloXroute
+}
+
 // BroadcastTransactions will propagate a batch of transactions
 // - To a square root of all peers for non-blob transactions
 // - And, separately, as announcements to all peers which are not known to
@@ -987,6 +996,9 @@ func (h *handler) BroadcastTransactions(txs types.Transactions) {
 	)
 
 	for _, tx := range txs {
+		if isLocalOnly(tx) {
+			continue // bloXroute-sourced: keep local, do not propagate to peers
+		}
 		var directSet map[*ethPeer]struct{}
 		switch {
 		case tx.Type() == types.BlobTxType:
@@ -1031,7 +1043,13 @@ func (h *handler) BroadcastTransactions(txs types.Transactions) {
 func (h *handler) ReannounceTransactions(txs types.Transactions) {
 	hashes := make([]common.Hash, 0, txs.Len())
 	for _, tx := range txs {
+		if isLocalOnly(tx) {
+			continue // bloXroute-sourced: keep local, do not re-announce to peers
+		}
 		hashes = append(hashes, tx.Hash())
+	}
+	if len(hashes) == 0 {
+		return
 	}
 
 	// Announce transactions hash to a batch of peers

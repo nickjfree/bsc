@@ -456,6 +456,12 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 	// pending-tx / newPendingTransactionWithLogs feeds.
 	if config.BloXroute.Enabled {
 		bx := bloxroute.New(config.BloXroute, func(txs []*types.Transaction) {
+			// Mark the source so the handler keeps these local and does not
+			// re-broadcast them to peers (avoids leaking bloXroute's early
+			// sight and redistributing the commercial feed).
+			for _, tx := range txs {
+				tx.SetPeer(types.PeerBloXroute)
+			}
 			eth.txPool.Add(txs, false)
 		})
 		stack.RegisterLifecycle(bx)

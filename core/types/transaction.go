@@ -198,6 +198,13 @@ func (tx *Transaction) UnmarshalBinary(b []byte) error {
 	return nil
 }
 
+// PeerBloXroute is a sentinel value for the peer field marking a transaction as
+// ingested from the bloXroute stream rather than gossiped by a p2p peer. Such
+// txs are kept local (not re-broadcast) so we don't leak the commercial feed's
+// early sight to our peers. The peer field is runtime-only metadata — it is not
+// part of the tx encoding, so tagging never changes the hash or wire format.
+const PeerBloXroute = "bloxroute"
+
 // set receiving peer
 func (tx *Transaction) SetPeer(peer string) {
 	tx.peer = peer
